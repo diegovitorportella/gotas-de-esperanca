@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_auth/firebase_auth.dart'; // Importante
 import 'package:gotas_de_esperanca/main_screen.dart';
 import 'package:gotas_de_esperanca/cadastro_screen.dart';
-import 'package:gotas_de_esperanca/helpers/database_helper.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -29,47 +29,45 @@ class _LoginScreenState extends State<LoginScreen> {
 
     setState(() => _isLoading = true);
 
-    // Simula um pequeno delay para feedback visual
-    await Future.delayed(const Duration(milliseconds: 500));
-
     try {
-      // 1. Busca os dados do perfil salvo no celular
-      final perfil = await DatabaseHelper.getPerfil();
+      // 1. Tenta fazer login no Firebase
+      await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: _emailController.text.trim(),
+        password: _senhaController.text.trim(),
+      );
 
-      final enteredEmail = _emailController.text.trim();
-      final enteredSenha = _senhaController.text;
+      // 2. Se não deu erro, salva a sessão localmente
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('isLoggedIn', true);
 
-      // 2. Valida se o email e senha batem com o banco local
-      // (O SQLite garante que id=1 é o perfil único do usuário)
-      if (perfil != null &&
-          perfil['email'] == enteredEmail &&
-          perfil['senha'] == enteredSenha) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Bem-vindo de volta!'), backgroundColor: Colors.green),
+        );
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const MainScreen()),
+        );
+      }
+    } on FirebaseAuthException catch (e) {
+      String mensagemErro = 'Erro ao fazer login.';
+      if (e.code == 'user-not-found' || e.code == 'wrong-password' || e.code == 'invalid-credential') {
+        mensagemErro = 'E-mail ou senha incorretos.';
+      } else if (e.code == 'invalid-email') {
+        mensagemErro = 'E-mail inválido.';
+      } else if (e.code == 'too-many-requests') {
+        mensagemErro = 'Muitas tentativas. Tente mais tarde.';
+      }
 
-        // 3. Salva na memória que o usuário está logado
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setBool('isLoggedIn', true);
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Bem-vindo de volta!'), backgroundColor: Colors.green),
-          );
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (context) => const MainScreen()),
-          );
-        }
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('E-mail ou senha incorretos.'), backgroundColor: Colors.red),
-          );
-        }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(mensagemErro), backgroundColor: Colors.red),
+        );
       }
     } catch (e) {
-      debugPrint("Erro login local: $e");
       if(mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Erro ao acessar banco de dados local.'), backgroundColor: Colors.red),
+          SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red),
         );
       }
     } finally {
@@ -144,7 +142,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         MaterialPageRoute(builder: (context) => const CadastroScreen()),
                       );
                     },
-                    child: const Text('Criar conta local'),
+                    child: const Text('Criar conta'),
                   ),
                 ),
               ],

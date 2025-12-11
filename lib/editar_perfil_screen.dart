@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:gotas_de_esperanca/helpers/database_helper.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_database/firebase_database.dart';
 
 class EditarPerfilScreen extends StatefulWidget {
-  // 1. Recebe os dados atuais do perfil
   final Map<String, dynamic> perfilData;
 
   const EditarPerfilScreen({super.key, required this.perfilData});
@@ -13,8 +13,8 @@ class EditarPerfilScreen extends StatefulWidget {
 
 class _EditarPerfilScreenState extends State<EditarPerfilScreen> {
   final _nomeController = TextEditingController();
-  final _emailController = TextEditingController();
-  final _senhaController = TextEditingController(); // Para *nova* senha
+  final _emailController = TextEditingController(); // Apenas leitura visual por segurança
+  final _senhaController = TextEditingController();
   final _dataNascimentoController = TextEditingController();
   String? _tipoSanguineoSelecionado;
 
@@ -27,12 +27,11 @@ class _EditarPerfilScreenState extends State<EditarPerfilScreen> {
   @override
   void initState() {
     super.initState();
-    // 2. Pré-preenche os campos com os dados existentes
+    // Preenche com os dados vindos do Firebase (chaves em snake_case ou camelCase dependendo de como salvou)
     _nomeController.text = widget.perfilData['nome'] ?? '';
     _emailController.text = widget.perfilData['email'] ?? '';
-    // Deixamos a senha em branco por segurança. O usuário digita se quiser mudar.
-    _dataNascimentoController.text = widget.perfilData['dataNascimento'] ?? '';
-    _tipoSanguineoSelecionado = widget.perfilData['tipoSanguineo'];
+    _dataNascimentoController.text = widget.perfilData['data_nascimento'] ?? '';
+    _tipoSanguineoSelecionado = widget.perfilData['tipo_sanguineo'];
   }
 
   @override
@@ -44,71 +43,81 @@ class _EditarPerfilScreenState extends State<EditarPerfilScreen> {
     super.dispose();
   }
 
-  // 3. Função para Salvar (em vez de cadastrar)
   Future<void> _salvar() async {
     if (!_formKey.currentState!.validate()) {
       return;
     }
 
-    setState(() { _isLoading = true; });
-
-    // Se o campo senha estiver vazio, mantém a senha antiga (do widget.perfilData)
-    // Se estiver preenchido, usa a nova senha.
-    final String senhaParaSalvar = _senhaController.text.isNotEmpty
-        ? _senhaController.text // <<< Idealmente, aplicar HASH aqui
-        : widget.perfilData['senha']; // Mantém a senha antiga
+    setState(() => _isLoading = true);
 
     try {
-      final result = await DatabaseHelper.updateUserProfile(
-        nome: _nomeController.text,
-        email: _emailController.text,
-        senha: senhaParaSalvar, // Salva a senha (antiga ou nova)
-        dataNascimento: _dataNascimentoController.text.isNotEmpty ? _dataNascimentoController.text : null,
-        tipoSanguineo: _tipoSanguineoSelecionado,
-      );
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
 
-      setState(() { _isLoading = false; });
+      // 1. Atualizar dados no Realtime Database
+      final userRef = FirebaseDatabase.instance.ref("usuarios/${user.uid}");
+      await userRef.update({
+        "nome": _nomeController.text.trim(),
+        "data_nascimento": _dataNascimentoController.text,
+        "tipo_sanguineo": _tipoSanguineoSelecionado,
+      });
 
-      if (result > 0) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Perfil atualizado com sucesso!'), backgroundColor: Colors.green),
-          );
-          // 4. Volta para a tela anterior (Perfil) e retorna 'true'
-          Navigator.pop(context, true);
-        }
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Erro ao atualizar. O e-mail pode já estar em uso por outra conta.'), backgroundColor: Colors.red),
-          );
-        }
+      // 2. Atualizar Senha (se o usuário digitou algo)
+      if (_senhaController.text.isNotEmpty) {
+        await user.updatePassword(_senhaController.text.trim());
       }
-    } catch (e) {
-      setState(() { _isLoading = false; });
-      debugPrint("Erro ao salvar perfil: $e");
+
+      // 3. Atualizar Email (se o usuário mudou) - Cuidado: isso pode deslogar o usuário
+      // Por simplicidade, vamos manter o email apenas visual ou bloquear edição se preferir.
+      if (_emailController.text.trim() != user.email) {
+        // await user.verifyBeforeUpdateEmail(_emailController.text.trim());
+        // Scenarios de mudança de email exigem reautenticação sensível.
+        // Vamos pular por enquanto para evitar crashes.
+      }
+
+      setState(() => _isLoading = false);
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Ocorreu um erro inesperado.'), backgroundColor: Colors.red),
+          const SnackBar(content: Text('Perfil atualizado com sucesso!'), backgroundColor: Colors.green),
+        );
+        Navigator.pop(context, true); // Retorna true para recarregar a tela anterior
+      }
+
+    } on FirebaseAuthException catch (e) {
+      setState(() => _isLoading = false);
+      String msg = 'Erro ao atualizar.';
+      if (e.code == 'requires-recent-login') {
+        msg = 'Para mudar a senha, faça logout e login novamente.';
+      } else if (e.code == 'weak-password') {
+        msg = 'A senha é muito fraca.';
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(msg), backgroundColor: Colors.red),
+        );
+      }
+    } catch (e) {
+      setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red),
         );
       }
     }
   }
 
   Future<void> _selectDate(BuildContext context) async {
-    // ... (Código do _selectDate é idêntico ao do cadastro_screen.dart) ...
-    DateTime? initialDate;
+    DateTime initialDate = DateTime.now();
     try {
-      // Tenta usar a data que já estava salva
-      initialDate = DateTime.tryParse(_dataNascimentoController.text);
-    } catch (e) {
-      // se falhar, usa a data de hoje
-      initialDate = DateTime.now();
-    }
+      if (_dataNascimentoController.text.isNotEmpty) {
+        initialDate = DateTime.parse(_dataNascimentoController.text);
+      }
+    } catch (_) {}
 
     final DateTime? picked = await showDatePicker(
       context: context,
-      initialDate: initialDate ?? DateTime.now(),
+      initialDate: initialDate,
       firstDate: DateTime(1900),
       lastDate: DateTime.now(),
       locale: const Locale('pt', 'BR'),
@@ -121,7 +130,6 @@ class _EditarPerfilScreenState extends State<EditarPerfilScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // 5. Título atualizado
       appBar: AppBar(
         title: const Text('Editar Perfil'),
         backgroundColor: const Color(0xFFC62828),
@@ -137,95 +145,45 @@ class _EditarPerfilScreenState extends State<EditarPerfilScreen> {
               children: <Widget>[
                 TextFormField(
                   controller: _nomeController,
-                  decoration: const InputDecoration(
-                    labelText: 'Nome Completo*',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.person_outline),
-                  ),
-                  keyboardType: TextInputType.name,
+                  decoration: const InputDecoration(labelText: 'Nome Completo', border: OutlineInputBorder(), prefixIcon: Icon(Icons.person_outline)),
                   textCapitalization: TextCapitalization.words,
-                  validator: (value) {
-                    if (value == null || value.isEmpty) return 'O nome é obrigatório.';
-                    return null;
-                  },
+                  validator: (v) => v!.isEmpty ? 'Campo obrigatório' : null,
                 ),
                 const SizedBox(height: 16.0),
                 TextFormField(
                   controller: _emailController,
-                  decoration: const InputDecoration(
-                    labelText: 'E-mail*',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.email_outlined),
-                  ),
-                  keyboardType: TextInputType.emailAddress,
-                  validator: (value) {
-                    if (value == null || value.isEmpty || !value.contains('@')) return 'O e-mail é obrigatório.';
-                    return null;
-                  },
+                  enabled: false, // Desabilitado para evitar complexidade de reautenticação
+                  decoration: const InputDecoration(labelText: 'E-mail (Não editável)', border: OutlineInputBorder(), prefixIcon: Icon(Icons.email_outlined), filled: true, fillColor: Colors.black12),
                 ),
                 const SizedBox(height: 16.0),
                 TextFormField(
                   controller: _senhaController,
                   obscureText: true,
-                  decoration: const InputDecoration(
-                    // 6. Texto de ajuda atualizado
-                    labelText: 'Nova Senha (Opcional)',
-                    hintText: 'Deixe em branco para manter a senha atual',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.lock_outline),
-                  ),
-                  // Validação de senha agora é opcional
+                  decoration: const InputDecoration(labelText: 'Nova Senha (Opcional)', hintText: 'Deixe vazio para manter a atual', border: OutlineInputBorder(), prefixIcon: Icon(Icons.lock_outline)),
                 ),
                 const SizedBox(height: 24.0),
                 TextFormField(
                   controller: _dataNascimentoController,
-                  decoration: InputDecoration(
-                      labelText: 'Data de Nascimento (Opcional)',
-                      border: const OutlineInputBorder(),
-                      prefixIcon: const Icon(Icons.calendar_today_outlined),
-                      suffixIcon: IconButton(
-                        icon: const Icon(Icons.edit_calendar),
-                        onPressed: () => _selectDate(context),
-                      )),
+                  decoration: InputDecoration(labelText: 'Data de Nascimento', border: const OutlineInputBorder(), prefixIcon: const Icon(Icons.calendar_today_outlined), suffixIcon: IconButton(icon: const Icon(Icons.edit_calendar), onPressed: () => _selectDate(context))),
                   readOnly: true,
                   onTap: () => _selectDate(context),
                 ),
                 const SizedBox(height: 16.0),
                 DropdownButtonFormField<String>(
                   value: _tipoSanguineoSelecionado,
-                  hint: const Text('Tipo Sanguíneo (Opcional)'),
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.bloodtype_outlined),
-                  ),
-                  items: _tiposSanguineos.map((String tipo) {
-                    return DropdownMenuItem<String>(
-                      value: tipo,
-                      child: Text(tipo),
-                    );
-                  }).toList(),
-                  onChanged: (String? newValue) {
-                    setState(() {
-                      _tipoSanguineoSelecionado = newValue;
-                    });
-                  },
+                  hint: const Text('Tipo Sanguíneo'),
+                  decoration: const InputDecoration(border: OutlineInputBorder(), prefixIcon: Icon(Icons.bloodtype_outlined)),
+                  items: _tiposSanguineos.map((type) => DropdownMenuItem(value: type, child: Text(type))).toList(),
+                  onChanged: (v) => setState(() => _tipoSanguineoSelecionado = v),
                 ),
                 const SizedBox(height: 32.0),
                 _isLoading
                     ? const Center(child: CircularProgressIndicator(color: Color(0xFFC62828)))
                     : ElevatedButton(
-                  // 7. Chama _salvar
                   onPressed: _salvar,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFC62828),
-                    foregroundColor: Colors.white,
-                    minimumSize: const Size(double.infinity, 50),
-                    textStyle: const TextStyle(fontSize: 18),
-                  ),
-                  // 8. Texto do botão atualizado
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFC62828), foregroundColor: Colors.white, minimumSize: const Size(double.infinity, 50)),
                   child: const Text('Salvar Alterações'),
                 ),
-                // 9. Removido o botão "Já tenho conta"
               ],
             ),
           ),

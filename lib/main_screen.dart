@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart'; // Autenticação
+import 'package:firebase_database/firebase_database.dart'; // Banco de Dados
 import 'home_screen_app.dart';
 import 'mapa_screen.dart';
 import 'calendario_screen.dart';
 import 'perfil_screen.dart';
 import 'models/achievement.dart';
-import 'helpers/database_helper.dart';
-// --- 1. IMPORTAÇÃO DO FIREBASE ADICIONADA ---
-import 'package:firebase_database/firebase_database.dart';
+import 'helpers/database_helper.dart'; // Mantemos para os lembretes locais
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -22,7 +22,7 @@ class _MainScreenState extends State<MainScreen> {
   int _totalDoacoes = 0;
   DateTime? _ultimaDoacao;
   List<Map<String, dynamic>> _lembretes = [];
-  String _userName = 'Doador';
+  String _userName = 'Carregando...';
   String? _userBloodType;
   Map<String, dynamic>? _perfilData;
 
@@ -39,79 +39,100 @@ class _MainScreenState extends State<MainScreen> {
     _loadData();
   }
 
+  // --- 1. CARREGAR DADOS DO FIREBASE ---
   Future<void> _loadData() async {
-    setState(() {
-      _isLoadingData = true;
-    });
+    setState(() => _isLoadingData = true);
+
     try {
-      final perfilData = await DatabaseHelper.getPerfil();
+      // Carrega lembretes locais (SQLite)
       final lembretesData = await DatabaseHelper.getLembretes();
 
-      setState(() {
-        if (perfilData != null) {
-          _perfilData = perfilData;
-          _totalDoacoes = perfilData['totalDoacoes'] ?? 0;
-          final ultimaDoacaoStr = perfilData['ultimaDoacao'];
-          _ultimaDoacao = ultimaDoacaoStr != null ? DateTime.tryParse(ultimaDoacaoStr) : null;
-          _userName = perfilData['nome'] ?? 'Doador';
-          _userBloodType = perfilData['tipoSanguineo'];
+      // Carrega perfil da Nuvem (Firebase)
+      final user = FirebaseAuth.instance.currentUser;
+
+      if (user != null) {
+        final ref = FirebaseDatabase.instance.ref("usuarios/${user.uid}");
+        final snapshot = await ref.get();
+
+        if (snapshot.exists) {
+          // Converte os dados do Firebase
+          final data = Map<String, dynamic>.from(snapshot.value as Map);
+
+          setState(() {
+            _perfilData = data;
+            _userName = data['nome'] ?? 'Doador';
+            _userBloodType = data['tipo_sanguineo'];
+            _totalDoacoes = (data['total_doacoes'] ?? 0) as int;
+
+            // Tenta ler a data da última doação se existir
+            if (data['ultima_doacao'] != null) {
+              _ultimaDoacao = DateTime.tryParse(data['ultima_doacao']);
+            }
+          });
         }
+      }
+
+      setState(() {
         _lembretes = lembretesData;
         _isLoadingData = false;
       });
+
     } catch (e) {
       debugPrint("Erro ao carregar dados: $e");
-      setState(() {
-        _isLoadingData = false;
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Erro ao carregar os dados salvos.')),
-        );
-      }
+      setState(() => _isLoadingData = false);
     }
   }
 
-  // --- 2. FUNÇÃO ATUALIZADA PARA SALVAR NO FIREBASE ---
+  // --- 2. REGISTRAR DOAÇÃO NO FIREBASE ---
   Future<void> _registrarNovaDoacao() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
     final oldTotal = _totalDoacoes;
     final newTotal = oldTotal + 1;
     final newUltimaDoacao = DateTime.now();
-    Achievement? unlockedAchievement;
 
-    // Lógica das conquistas
+    // Atualiza estado local para feedback rápido
+    setState(() {
+      _totalDoacoes = newTotal;
+      _ultimaDoacao = newUltimaDoacao;
+    });
+
+    try {
+      final userRef = FirebaseDatabase.instance.ref("usuarios/${user.uid}");
+
+      // Atualiza o contador no perfil do usuário
+      await userRef.update({
+        "total_doacoes": newTotal,
+        "ultima_doacao": newUltimaDoacao.toString(),
+      });
+
+      // Salva no histórico geral (opcional)
+      final logRef = FirebaseDatabase.instance.ref("registros_doacoes");
+      await logRef.push().set({
+        "uid": user.uid,
+        "usuario": _userName,
+        "data": newUltimaDoacao.toString(),
+        "total_acumulado": newTotal
+      });
+
+    } catch (e) {
+      debugPrint("Erro ao salvar doação: $e");
+      if(mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Doação registrada localmente (sem internet).'))
+        );
+      }
+    }
+
+    // Verifica conquistas
+    Achievement? unlockedAchievement;
     for (var achievement in _allAchievements) {
       if (newTotal >= achievement.requiredDonations && oldTotal < achievement.requiredDonations) {
         unlockedAchievement = achievement;
         break;
       }
     }
-
-    // 1. Salva no SQLite (Banco Local)
-    await DatabaseHelper.updatePerfilDoacao(newTotal, newUltimaDoacao);
-
-    // 2. Salva no Firebase (Nuvem)
-    try {
-      DatabaseReference ref = FirebaseDatabase.instance.ref("registros_doacoes");
-
-      await ref.push().set({
-        "usuario": _userName,
-        "tipo_sanguineo": _userBloodType ?? "Não informado",
-        "data": newUltimaDoacao.toString(),
-        "total_doacoes": newTotal,
-        "mensagem": "Funcionou professor! Dados salvos no Firebase."
-      });
-      debugPrint("Salvo no Firebase com sucesso!");
-    } catch (e) {
-      debugPrint("Erro ao salvar no Firebase: $e");
-      // O app continua funcionando mesmo se der erro no Firebase (ex: sem internet)
-    }
-
-    setState(() {
-      _totalDoacoes = newTotal;
-      _ultimaDoacao = newUltimaDoacao;
-    });
-
     _showCelebrationDialog(newTotal, unlockedAchievement);
   }
 
@@ -183,21 +204,21 @@ class _MainScreenState extends State<MainScreen> {
 
   Widget _buildCurrentScreen() {
     switch (_selectedIndex) {
-      case 0: // Início
+      case 0:
         return HomeScreenApp(
           userName: _userName,
           ultimaDoacao: _ultimaDoacao,
           onNavigate: _navigateToTab,
         );
-      case 1: // Locais
+      case 1:
         return const MapaScreen();
-      case 2: // Calendário
+      case 2:
         return CalendarioScreen(
           lembretes: _lembretes,
           onSchedule: _adicionarLembrete,
           onRemoveLembrete: _removerLembrete,
         );
-      case 3: // Perfil
+      case 3:
         return PerfilScreen(
           userName: _userName,
           userBloodType: _userBloodType,

@@ -1,7 +1,6 @@
-// lib/calendario_screen.dart
 import 'package:flutter/material.dart';
-import 'package:firebase_database/firebase_database.dart'; // Importante para conexão
-import 'package:intl/intl.dart'; // Para formatar a data (instale se precisar: flutter pub add intl)
+import 'package:firebase_database/firebase_database.dart';
+import 'package:intl/intl.dart';
 import 'lembretes_screen.dart';
 import 'agendamento_screen.dart';
 import 'models/donation_event.dart';
@@ -23,7 +22,6 @@ class CalendarioScreen extends StatefulWidget {
 }
 
 class _CalendarioScreenState extends State<CalendarioScreen> {
-  // Referência ao nó "campanhas" no seu Realtime Database
   final DatabaseReference _campanhasRef = FirebaseDatabase.instance.ref('campanhas');
 
   void _navigateToAgendamento(BuildContext context, DonationEvent event) {
@@ -38,17 +36,13 @@ class _CalendarioScreenState extends State<CalendarioScreen> {
     );
   }
 
-  // Filtra eventos para não mostrar coisas do passado
   bool _isEventoFuturo(String dataString) {
     try {
       final dataEvento = DateTime.parse(dataString);
       final hoje = DateTime.now();
-      // Zera a hora para comparar apenas a data (dia/mês/ano)
       final hojeZerado = DateTime(hoje.year, hoje.month, hoje.day);
-
       return dataEvento.isAtSameMomentAs(hojeZerado) || dataEvento.isAfter(hojeZerado);
     } catch (e) {
-      // Se a data estiver inválida no banco, esconde o evento por segurança
       return false;
     }
   }
@@ -69,73 +63,61 @@ class _CalendarioScreenState extends State<CalendarioScreen> {
             fit: BoxFit.cover,
           ),
         ),
-        // StreamBuilder ouve as mudanças no Firebase em tempo real
         child: StreamBuilder<DatabaseEvent>(
           stream: _campanhasRef.onValue,
           builder: (context, snapshot) {
-            // 1. Estado de carregamento
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const Center(child: CircularProgressIndicator(color: Color(0xFFC62828)));
             }
 
-            // 2. Estado de erro
             if (snapshot.hasError) {
-              return const Center(child: Text('Erro ao carregar campanhas. Verifique sua conexão.'));
+              return const Center(child: Text('Erro ao carregar campanhas.'));
             }
 
-            // 3. Verifica se tem dados
             if (!snapshot.hasData || snapshot.data!.snapshot.value == null) {
-              return _buildEmptyState(message: 'Nenhuma campanha encontrada no sistema.');
+              return _buildEmptyState(message: 'Nenhuma campanha encontrada.');
             }
 
-            // 4. Processa os dados
             try {
-              // Os dados vêm como um Map dinâmico ou List, dependendo de como você inseriu
-              // Vamos assumir Map para ser mais seguro com IDs gerados
               final rawData = snapshot.data!.snapshot.value;
               final List<DonationEvent> eventosCarregados = [];
 
               if (rawData is Map) {
                 rawData.forEach((key, value) {
-                  final evento = DonationEvent.fromMap(key.toString(), value as Map);
-                  if (_isEventoFuturo(evento.date)) {
-                    eventosCarregados.add(evento);
+                  final event = DonationEvent.fromMap(key.toString(), value as Map);
+                  if (_isEventoFuturo(event.date)) {
+                    eventosCarregados.add(event);
                   }
                 });
               } else if (rawData is List) {
-                // Caso o Firebase tenha salvo como array (ex: importação de JSON)
                 for (var i = 0; i < rawData.length; i++) {
                   if (rawData[i] != null) {
-                    final evento = DonationEvent.fromMap(i.toString(), rawData[i] as Map);
-                    if (_isEventoFuturo(evento.date)) {
-                      eventosCarregados.add(evento);
+                    final event = DonationEvent.fromMap(i.toString(), rawData[i] as Map);
+                    if (_isEventoFuturo(event.date)) {
+                      eventosCarregados.add(event);
                     }
                   }
                 }
               }
 
-              // Ordena pela data mais próxima
               eventosCarregados.sort((a, b) => a.date.compareTo(b.date));
 
               if (eventosCarregados.isEmpty) {
-                return _buildEmptyState(message: 'Não há campanhas futuras agendadas.');
+                return _buildEmptyState(message: 'Sem campanhas futuras.');
               }
 
               return ListView.builder(
                 padding: const EdgeInsets.all(16.0),
                 itemCount: eventosCarregados.length,
                 itemBuilder: (context, index) {
-                  final event = eventosCarregados[index];
                   return DonationEventCard(
-                    event: event,
-                    onAgendar: () => _navigateToAgendamento(context, event),
+                    event: eventosCarregados[index],
+                    onAgendar: () => _navigateToAgendamento(context, eventosCarregados[index]),
                   );
                 },
               );
-
             } catch (e) {
-              debugPrint("Erro ao converter dados: $e");
-              return _buildEmptyState(message: 'Erro ao processar dados das campanhas.');
+              return _buildEmptyState(message: 'Erro ao processar dados.');
             }
           },
         ),
@@ -169,24 +151,16 @@ class _CalendarioScreenState extends State<CalendarioScreen> {
           color: Colors.white.withOpacity(0.9),
           borderRadius: BorderRadius.circular(16),
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.event_busy, size: 50, color: Colors.grey),
-            const SizedBox(height: 16),
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 16, color: Colors.grey),
-            ),
-          ],
+        child: Text(
+          message,
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 16, color: Colors.grey),
         ),
       ),
     );
   }
 }
 
-// Widget do Card separado para organização
 class DonationEventCard extends StatelessWidget {
   final DonationEvent event;
   final VoidCallback onAgendar;
@@ -200,7 +174,7 @@ class DonationEventCard extends StatelessWidget {
   String _formatDate(String isoDate) {
     try {
       final date = DateTime.parse(isoDate);
-      return DateFormat("dd 'de' MMMM 'de' yyyy", 'pt_BR').format(date);
+      return DateFormat("dd 'de' MMMM", 'pt_BR').format(date);
     } catch (e) {
       return isoDate;
     }
@@ -210,7 +184,6 @@ class DonationEventCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       elevation: 3.0,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       margin: const EdgeInsets.symmetric(vertical: 8.0),
       child: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -225,10 +198,10 @@ class DonationEventCard extends StatelessWidget {
                 color: Colors.grey.shade800,
               ),
             ),
-            const SizedBox(height: 12.0),
+            const SizedBox(height: 8.0),
             Row(
               children: [
-                const Icon(Icons.calendar_month, size: 20, color: Color(0xFFC62828)),
+                const Icon(Icons.calendar_today, size: 16, color: Color(0xFFC62828)),
                 const SizedBox(width: 8),
                 Text(
                   _formatDate(event.date),
@@ -236,16 +209,14 @@ class DonationEventCard extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 8.0),
+            const SizedBox(height: 4.0),
             Row(
               children: [
-                const Icon(Icons.location_on_outlined, size: 20, color: Colors.grey),
+                const Icon(Icons.location_on, size: 16, color: Colors.grey),
                 const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    event.location,
-                    style: TextStyle(fontSize: 16.0, color: Colors.grey.shade700),
-                  ),
+                Text(
+                  event.location,
+                  style: const TextStyle(fontSize: 16.0, color: Colors.grey),
                 ),
               ],
             ),
@@ -257,7 +228,6 @@ class DonationEventCard extends StatelessWidget {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFFC62828),
                   foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
                 child: const Text('Agendar Doação'),
               ),
