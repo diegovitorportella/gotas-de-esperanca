@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "81347396706",
+    "firebase_url": "https://gotasdeesperanca-default-rtdb.firebaseio.com",
+    "project_id": "gotasdeesperanca",
+    "storage_bucket": "gotasdeesperanca.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:81347396706:android:c1730a5c07885d65e5fd3b",
+        "android_client_info": {
+          "package_name": "com.diw.gotas_de_esperanca.gotas_de_esperanca"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAeAaQSmL1XUwhxxZsx-ItCjuI1ptC_J74"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
